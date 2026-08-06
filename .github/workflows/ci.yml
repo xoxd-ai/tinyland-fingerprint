@@ -11,7 +11,7 @@ permissions:
   packages: read
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@61cd1338ca9dae8a25985c0a36ff7beb111449be
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@139bd4c7deabbe07c918dc764a3b9f054066431d
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
