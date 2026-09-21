@@ -33,7 +33,6 @@ jobs:
       package_dir: ./bazel-bin/pkg
       npm_access: public
       npm_publish_mode: disabled
-      github_package_name: "@tinyland-inc/tinyland-fingerprint"
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
     secrets:
       TINYLAND_GITHUB_PACKAGES_TOKEN: ${{ secrets.TINYLAND_GITHUB_PACKAGES_TOKEN }}
