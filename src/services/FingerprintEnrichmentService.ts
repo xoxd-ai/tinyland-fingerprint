@@ -271,9 +271,6 @@ export async function enrichFingerprint(
     span.setAttribute('device.type', deviceType);
     if (fingerprintHash) span.setAttribute('fingerprint.hash', fingerprintHash);
     if (sessionCorrelationId) span.setAttribute('session.correlation_id', sessionCorrelationId);
-    if (ctx.session?.userId && consentPreferences?.consent?.categoriesRecord?.tracking === true) {
-      span.setAttribute('user.id', ctx.session.userId);
-    }
     if (hashedIp) span.setAttribute('ip.hash', hashedIp);
     const ipType = rawIp === 'unknown' ? 'unknown' : isPrivateIPFn(rawIp) ? 'private' : 'public';
     span.setAttribute('ip.type', ipType);
