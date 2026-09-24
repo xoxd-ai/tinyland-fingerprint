@@ -1,6 +1,6 @@
 module(
     name = "tummycrypt_tinyland_fingerprint",
-    version = "0.3.0",
+    version = "0.3.1",  # Unreleased source candidate; active BCR remains 0.3.0.
     compatibility_level = 1,
 )
 

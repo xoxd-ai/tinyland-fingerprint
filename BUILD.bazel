@@ -50,7 +50,7 @@ npm_package(
         ":tinyland_fingerprint",
     ],
     package = "@tummycrypt/tinyland-fingerprint",
-    version = "0.3.0",
+    version = "0.3.1",
     visibility = ["//visibility:public"],
 )
 

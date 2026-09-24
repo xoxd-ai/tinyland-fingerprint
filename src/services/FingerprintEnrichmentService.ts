@@ -89,6 +89,41 @@ export interface FingerprintEnrichmentOptions {
   additionalAttributes?: FingerprintAdditionalAttributes;
 }
 
+const SESSION_CORRELATION_PATTERN = /^fp-session:v1:[0-9a-f]{64}$/;
+const SAFE_THEMES = new Set([
+  'trans', 'pride', 'tinyland', 'high-contrast', 'cerberus', 'rose', 'catppuccin', 'pine', 'system'
+]);
+
+function safeDarkMode(value: unknown): value is boolean | string {
+  return typeof value === 'boolean' || value === 'system' || value === 'light' ||
+    value === 'dark' || value === 'true' || value === 'false';
+}
+
+function safeTransform(input: string, transform?: (value: string) => string): string {
+  if (!transform || !input || input === 'unknown') return '';
+  try {
+    const output = transform(input);
+    return typeof output === 'string' && output.length >= 32 && !output.includes(input) ? output : '';
+  } catch {
+    return '';
+  }
+}
+
+function safeAdditionalAttribute(key: string, value: string | boolean | number): boolean {
+  if (!/^settings\.(?:preferences\.(?:theme|darkMode)|a11y\.(?:reducedMotion|highContrast|fontSize))(?:\.timestamp)?$/.test(key)) return false;
+  if (key.endsWith('.timestamp')) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value);
+  }
+  if (key === 'settings.preferences.theme') {
+    return typeof value === 'string' && SAFE_THEMES.has(value);
+  }
+  if (key === 'settings.a11y.fontSize') {
+    return typeof value === 'string' && ['small', 'medium', 'large'].includes(value);
+  }
+  if (key === 'settings.preferences.darkMode') return safeDarkMode(value);
+  return typeof value === 'boolean';
+}
+
 
 
 
@@ -181,10 +216,12 @@ export async function enrichFingerprint(
   options: FingerprintEnrichmentOptions = {}
 ): Promise<EnrichedFingerprint> {
   const config = getFingerprintConfig();
+  const safeEventType = [
+    'session_created', 'session_validated', 'fingerprint_mismatch', 'fingerprint_stored', 'consent_submission'
+  ].includes(eventType) ? eventType : 'session_validated';
 
   return withSpan('fingerprint.enrichment', async (span: FingerprintSpan) => {
-    span.setAttribute('fingerprint.id', fingerprintId);
-    span.setAttribute('fingerprint.event_type', eventType);
+    span.setAttribute('fingerprint.event_type', safeEventType);
 
     
     const rawIpWithPort =
@@ -198,45 +235,60 @@ export async function enrichFingerprint(
       : rawIpWithPort;
 
     
-    const hashFp = config.hashFingerprint ?? ((fp: string) => fp);
-    const encryptIp = config.encryptIP ?? ((ip: string) => ip);
-    const hashIpFn = config.hashIp ?? ((ip: string) => ip);
     const isPrivateIPFn = config.isPrivateIP ?? (() => false);
 
-    const fingerprintHash = await Promise.resolve(hashFp(fingerprintId));
-    const encryptedIp = encryptIp(rawIp);
-    const hashedIp = hashIpFn(rawIp);
+    let fingerprintHash = '';
+    if (config.hashFingerprint) {
+      try {
+        const candidate = await Promise.resolve(config.hashFingerprint(fingerprintId));
+        if (typeof candidate === 'string' && candidate.length >= 32 && !candidate.includes(fingerprintId)) {
+          fingerprintHash = candidate;
+        }
+      } catch {
+        // Optional identity telemetry must not veto the caller's auth flow.
+      }
+    }
+    const encryptedIp = safeTransform(rawIp, config.encryptIP);
+    const hashedIp = safeTransform(rawIp, config.hashIp);
+    let sessionCorrelationId: string | undefined;
+    if (ctx.session?.id && config.deriveSessionCorrelation) {
+      try {
+        const candidate = await Promise.resolve(config.deriveSessionCorrelation(ctx.session.id));
+        if (typeof candidate === 'string' && SESSION_CORRELATION_PATTERN.test(candidate) &&
+            !candidate.includes(ctx.session.id)) {
+          sessionCorrelationId = candidate;
+        }
+      } catch {
+        // Correlation is optional telemetry. A failed port must never veto auth.
+      }
+    }
 
     
     const userAgent = ctx.headers.get('user-agent') || 'unknown';
     const deviceType = classifyDevice(userAgent);
-    const parsedUA = parseUserAgent(userAgent);
 
     
     span.setAttribute('device.type', deviceType);
-    if (ctx.session?.id) span.setAttribute('session.id', ctx.session.id);
-    if (ctx.session?.userId) span.setAttribute('user.id', ctx.session.userId);
-    span.setAttribute('ip.hash', hashedIp);
+    if (fingerprintHash) span.setAttribute('fingerprint.hash', fingerprintHash);
+    if (sessionCorrelationId) span.setAttribute('session.correlation_id', sessionCorrelationId);
+    if (ctx.session?.userId && consentPreferences?.consent?.categoriesRecord?.tracking === true) {
+      span.setAttribute('user.id', ctx.session.userId);
+    }
+    if (hashedIp) span.setAttribute('ip.hash', hashedIp);
     const ipType = rawIp === 'unknown' ? 'unknown' : isPrivateIPFn(rawIp) ? 'private' : 'public';
     span.setAttribute('ip.type', ipType);
-    span.setAttribute('browser.name', parsedUA.browser_name || 'unknown');
-    span.setAttribute('browser.version', parsedUA.browser_version || 'unknown');
-    if (parsedUA.browser_major_version) {
-      span.setAttribute('browser.major_version', parsedUA.browser_major_version);
-    }
-    span.setAttribute('os.name', parsedUA.os || 'unknown');
-    span.setAttribute('os.version', parsedUA.os_version || 'unknown');
-    span.setAttribute('engine.name', parsedUA.engine || 'unknown');
-    span.setAttribute('engine.version', parsedUA.engine_version || 'unknown');
 
     
-    const referrer = ctx.headers.get('referer') || null;
-    const currentUrl = ctx.url;
+    // Paths, queries and referrers can contain credentials. Retain only coarse
+    // navigation shape, never a raw URL or user-controlled path segment.
+    const rawReferrer = ctx.headers.get('referer') || null;
+    const referrer = null;
+    const currentUrl = '';
     let pathname = '/';
     let hostname = 'unknown';
     try {
-      const url = new URL(currentUrl);
-      pathname = url.pathname;
+      const url = new URL(ctx.url);
+      pathname = url.pathname === '/' ? '/' : '/[redacted]';
       hostname = url.hostname;
     } catch {
       
@@ -244,11 +296,9 @@ export async function enrichFingerprint(
 
     span.setAttribute('navigation.pathname', pathname);
     span.setAttribute('navigation.hostname', hostname);
-    span.setAttribute('navigation.current_url', currentUrl);
-    if (referrer) {
-      span.setAttribute('navigation.referrer', referrer);
+    if (rawReferrer) {
       try {
-        const referrerUrl = new URL(referrer);
+        const referrerUrl = new URL(rawReferrer);
         span.setAttribute('navigation.referrer_hostname', referrerUrl.hostname);
         span.setAttribute('navigation.is_external_referral', referrerUrl.hostname !== hostname);
       } catch {
@@ -275,7 +325,8 @@ export async function enrichFingerprint(
       if (config.reverseGeocode) {
         const reverseGeoResult = await config.reverseGeocode(latitude, longitude, {
           fingerprintId,
-          sessionId: ctx.session?.id || null
+          sessionId: null,
+          sessionCorrelationId
         });
 
         if (reverseGeoResult) {
@@ -286,8 +337,6 @@ export async function enrichFingerprint(
             accuracyRadius,
             source: 'browser-geolocation' as const
           };
-          span.setAttribute('geo.city', reverseGeoResult.city || 'unknown');
-          span.setAttribute('geo.country', reverseGeoResult.country);
         } else {
           geoLocation = {
             country: 'Unknown',
@@ -318,10 +367,8 @@ export async function enrichFingerprint(
 
       if (location) {
         geoLocation = { ...location, source: 'maxmind-geoip' as const };
-        span.setAttribute('geo.city', location.city || 'unknown');
-        span.setAttribute('geo.country', location.country);
-        span.setAttribute('geo.latitude', location.latitude ?? 0);
-        span.setAttribute('geo.longitude', location.longitude ?? 0);
+        if (typeof location.latitude === 'number' && Number.isFinite(location.latitude)) span.setAttribute('geo.latitude', location.latitude);
+        if (typeof location.longitude === 'number' && Number.isFinite(location.longitude)) span.setAttribute('geo.longitude', location.longitude);
       } else {
         span.setAttribute('geo.lookup_result', 'not_found');
       }
@@ -346,7 +393,7 @@ export async function enrichFingerprint(
     const userId = ctx.session?.userId || ctx.user?.id || null;
     const userHandle = ctx.user?.username || null;
     const userRole = ctx.user?.role || null;
-    const sessionId = ctx.session?.id || null;
+    const sessionId = null;
 
     
     let userFlags: EnrichedFingerprint['userFlags'] | undefined;
@@ -355,8 +402,7 @@ export async function enrichFingerprint(
         userFlags = await config.userFlagsFetcher.getUserFlags(userId);
       } catch (error) {
         logger.error('Failed to fetch user flags', {
-          error: error instanceof Error ? error.message : String(error),
-          userId
+          category: 'user_flags_fetch_failed'
         });
       }
     }
@@ -366,7 +412,7 @@ export async function enrichFingerprint(
 
     
     let severity: EnrichedFingerprint['severity'] = 'info';
-    if (eventType === 'fingerprint_mismatch') {
+    if (safeEventType === 'fingerprint_mismatch') {
       severity = 'critical';
     } else if (vpnDetection.isVPN && vpnDetection.confidence === 'high') {
       severity = 'warning';
@@ -378,10 +424,11 @@ export async function enrichFingerprint(
       fingerprintHash,
       timestamp: new Date().toISOString(),
       sessionId,
+      sessionCorrelationId,
       userId,
       userHandle,
       userRole,
-      clientIp: rawIp,
+      clientIp: '',
       clientIpEncrypted: encryptedIp,
       clientIpMasked: hashedIp,
       geoLocation,
@@ -392,7 +439,7 @@ export async function enrichFingerprint(
       components,
       cookies: { sessionCookiePresent, fingerprintCookiePresent },
       userFlags,
-      eventType,
+      eventType: safeEventType,
       severity
     };
 
@@ -404,10 +451,9 @@ export async function enrichFingerprint(
           concurrentSessions: undefined
         });
 
-        span.setAttribute('risk.score', riskScore.score);
-        span.setAttribute('risk.tier', riskScore.tier);
-        span.setAttribute('risk.factor_count', riskScore.factors.length);
-        span.setAttribute('risk.recommendation', riskScore.recommendation);
+        if (typeof riskScore.score === 'number' && Number.isFinite(riskScore.score)) span.setAttribute('risk.score', riskScore.score);
+        if (['low', 'medium', 'high', 'critical'].includes(riskScore.tier)) span.setAttribute('risk.tier', riskScore.tier);
+        if (Array.isArray(riskScore.factors)) span.setAttribute('risk.factor_count', riskScore.factors.length);
 
         if (riskScore.tier === 'critical') {
           enriched.severity = 'critical';
@@ -418,67 +464,65 @@ export async function enrichFingerprint(
         enriched.riskScore = riskScore;
       } catch (riskError) {
         logger.warn('Failed to calculate risk score', {
-          error: riskError instanceof Error ? riskError.message : String(riskError),
-          fingerprint_id: fingerprintId
+          category: 'risk_score_failed'
         });
       }
     }
 
     
     span.setAttribute('enrichment.severity', enriched.severity);
-    span.setAttribute('enrichment.vpn_detected', vpnDetection.isVPN);
-    if (enriched.riskScore) {
+    span.setAttribute('enrichment.vpn_detected', vpnDetection.isVPN === true);
+    if (enriched.riskScore && ['low', 'medium', 'high', 'critical'].includes(enriched.riskScore.tier)) {
       span.setAttribute('enrichment.risk_tier', enriched.riskScore.tier);
     }
 
     
     if (geoLocation) {
-      span.setAttribute('geo.country', geoLocation.country);
-      span.setAttribute('geo.city', geoLocation.city || 'unknown');
-      if (geoLocation.latitude !== undefined && geoLocation.latitude !== null) {
+      if (typeof geoLocation.latitude === 'number' && Number.isFinite(geoLocation.latitude)) {
         span.setAttribute('geo.latitude', geoLocation.latitude);
       }
-      if (geoLocation.longitude !== undefined && geoLocation.longitude !== null) {
+      if (typeof geoLocation.longitude === 'number' && Number.isFinite(geoLocation.longitude)) {
         span.setAttribute('geo.longitude', geoLocation.longitude);
       }
     }
 
     
     if (consentPreferences?.consent) {
-      const { categories, categoriesRecord, timestamp, version, preciseLocation, ageVerified, optionalHandle } = consentPreferences.consent;
+      const { categories, categoriesRecord, timestamp, version, preciseLocation, ageVerified } = consentPreferences.consent;
 
-      if (categories && categories.length > 0) {
+      if (categories && categories.length > 0 && categories.every((category) =>
+        ['essential', 'preferences', 'functional', 'tracking', 'performance'].includes(category))) {
         span.setAttribute('consent.categories', JSON.stringify(categories));
       }
       if (categoriesRecord) {
-        if (categoriesRecord.essential !== undefined) span.setAttribute('consent.categories.essential', String(categoriesRecord.essential));
-        if (categoriesRecord.preferences !== undefined) span.setAttribute('consent.categories.preferences', String(categoriesRecord.preferences));
-        if (categoriesRecord.functional !== undefined) span.setAttribute('consent.categories.functional', String(categoriesRecord.functional));
-        if (categoriesRecord.tracking !== undefined) span.setAttribute('consent.categories.tracking', String(categoriesRecord.tracking));
-        if (categoriesRecord.performance !== undefined) span.setAttribute('consent.categories.performance', String(categoriesRecord.performance));
+        if (typeof categoriesRecord.essential === 'boolean') span.setAttribute('consent.categories.essential', String(categoriesRecord.essential));
+        if (typeof categoriesRecord.preferences === 'boolean') span.setAttribute('consent.categories.preferences', String(categoriesRecord.preferences));
+        if (typeof categoriesRecord.functional === 'boolean') span.setAttribute('consent.categories.functional', String(categoriesRecord.functional));
+        if (typeof categoriesRecord.tracking === 'boolean') span.setAttribute('consent.categories.tracking', String(categoriesRecord.tracking));
+        if (typeof categoriesRecord.performance === 'boolean') span.setAttribute('consent.categories.performance', String(categoriesRecord.performance));
       }
-      if (timestamp) span.setAttribute('consent.timestamp', timestamp);
-      if (version) span.setAttribute('consent.version', version);
-      if (preciseLocation !== undefined) span.setAttribute('consent.preciseLocation', String(preciseLocation));
-      if (ageVerified !== undefined) span.setAttribute('consent.ageVerified', String(ageVerified));
-      if (optionalHandle) span.setAttribute('consent.optionalHandle', optionalHandle);
+      if (timestamp && safeAdditionalAttribute('settings.preferences.theme.timestamp', timestamp)) span.setAttribute('consent.timestamp', timestamp);
+      if (version && /^v?[0-9]+(?:\.[0-9]+){0,2}$/.test(version)) span.setAttribute('consent.version', version);
+      if (typeof preciseLocation === 'boolean') span.setAttribute('consent.preciseLocation', String(preciseLocation));
+      if (typeof ageVerified === 'boolean') span.setAttribute('consent.ageVerified', String(ageVerified));
+      // Optional handle is user-controlled identity data, not needed in telemetry.
     }
 
     if (consentPreferences?.preferences) {
       const { theme, darkMode, a11y, contentPage } = consentPreferences.preferences;
-      if (theme !== undefined) span.setAttribute('preferences.theme', theme);
-      if (darkMode !== undefined) span.setAttribute('preferences.darkMode', darkMode);
-      if (a11y?.reducedMotion !== undefined) span.setAttribute('preferences.a11y.reducedMotion', a11y.reducedMotion);
-      if (a11y?.highContrast !== undefined) span.setAttribute('preferences.a11y.highContrast', a11y.highContrast);
-      if (a11y?.fontSize) span.setAttribute('preferences.a11y.fontSize', a11y.fontSize);
-      if (contentPage?.forceTheme) span.setAttribute('preferences.contentPage.forceTheme', contentPage.forceTheme);
-      if (contentPage?.forceDarkMode !== undefined) span.setAttribute('preferences.contentPage.forceDarkMode', contentPage.forceDarkMode);
-      if (contentPage?.forceA11y !== undefined) span.setAttribute('preferences.contentPage.forceA11y', contentPage.forceA11y);
+      if (theme !== undefined && safeAdditionalAttribute('settings.preferences.theme', theme)) span.setAttribute('preferences.theme', theme);
+      if (safeDarkMode(darkMode)) span.setAttribute('preferences.darkMode', darkMode);
+      if (typeof a11y?.reducedMotion === 'boolean') span.setAttribute('preferences.a11y.reducedMotion', a11y.reducedMotion);
+      if (typeof a11y?.highContrast === 'boolean') span.setAttribute('preferences.a11y.highContrast', a11y.highContrast);
+      if (a11y?.fontSize && safeAdditionalAttribute('settings.a11y.fontSize', a11y.fontSize)) span.setAttribute('preferences.a11y.fontSize', a11y.fontSize);
+      if (contentPage?.forceTheme && safeAdditionalAttribute('settings.preferences.theme', contentPage.forceTheme)) span.setAttribute('preferences.contentPage.forceTheme', contentPage.forceTheme);
+      if (safeDarkMode(contentPage?.forceDarkMode)) span.setAttribute('preferences.contentPage.forceDarkMode', contentPage.forceDarkMode);
+      if (typeof contentPage?.forceA11y === 'boolean') span.setAttribute('preferences.contentPage.forceA11y', contentPage.forceA11y);
     }
 
     if (options.additionalAttributes) {
       for (const [key, value] of Object.entries(options.additionalAttributes)) {
-        span.setAttribute(key, value);
+        if (safeAdditionalAttribute(key, value)) span.setAttribute(key, value);
       }
     }
 
@@ -494,60 +538,18 @@ export async function enrichFingerprint(
 
 async function logEnrichedFingerprint(enriched: EnrichedFingerprint): Promise<void> {
   const config = getFingerprintConfig();
-  const parsedUA = parseUserAgent(enriched.userAgent);
 
   const stringLogData: Record<string, string> = {
-    fingerprint_id: enriched.fingerprintId,
-    fingerprint_hash: enriched.fingerprintHash.slice(0, 16),
-    session_id: enriched.sessionId ?? '',
-    user_id: enriched.userId ?? '',
-    user_handle: enriched.userHandle ?? '',
-    user_role: enriched.userRole ?? '',
-    ip_raw: enriched.clientIp,
-    ip_encrypted: enriched.clientIpEncrypted,
-    ip_hash: enriched.clientIpMasked,
-    geo_country: enriched.geoLocation?.country || '',
-    geo_country_code: enriched.geoLocation?.countryCode || '',
-    geo_city: enriched.geoLocation?.city || '',
-    geo_latitude: enriched.geoLocation?.latitude?.toString() || '',
-    geo_longitude: enriched.geoLocation?.longitude?.toString() || '',
-    geo_timezone: enriched.geoLocation?.timezone || '',
-    geo_source: enriched.geoLocation?.source || 'unknown',
-    vpn_detected: enriched.vpnDetection.isVPN?.toString() || '',
-    vpn_provider: enriched.vpnDetection.provider || '',
-    vpn_confidence: enriched.vpnDetection.confidence?.toString() || '',
-    vpn_method: enriched.vpnDetection.method || '',
-    user_agent: enriched.userAgent,
+    ...(enriched.fingerprintHash ? { fingerprint_hash: enriched.fingerprintHash } : {}),
+    ...(enriched.sessionCorrelationId ? { session_correlation_id: enriched.sessionCorrelationId } : {}),
+    ...(enriched.clientIpEncrypted ? { ip_encrypted: enriched.clientIpEncrypted } : {}),
+    ...(enriched.clientIpMasked ? { ip_hash: enriched.clientIpMasked } : {}),
+    vpn_detected: String(enriched.vpnDetection.isVPN === true),
     device_type: enriched.deviceType,
-    browser_name: parsedUA.browser_name ?? '',
-    browser_version: parsedUA.browser_version ?? '',
-    browser_major_version: parsedUA.browser_major_version?.toString() || '',
-    os: parsedUA.os ?? '',
-    os_version: parsedUA.os_version ?? '',
-    engine: parsedUA.engine ?? '',
-    engine_version: parsedUA.engine_version ?? '',
-    referrer: enriched.navigation.referrer || '',
-    current_url: enriched.navigation.currentUrl || '',
-    pathname: enriched.navigation.pathname || '',
-    hostname: enriched.navigation.hostname || '',
-    canvas_fingerprint: enriched.components.canvas?.slice(0, 16) || '',
-    webgl_fingerprint: enriched.components.webgl?.slice(0, 16) || '',
-    screen_resolution: enriched.components.screenResolution || '',
-    browser_timezone: enriched.components.timezone || '',
-    browser_language: enriched.components.language || '',
-    platform: enriched.components.platform || '',
-    cookies_enabled: enriched.components.cookiesEnabled?.toString() || '',
-    totp_enabled: enriched.userFlags?.totpEnabled?.toString() || '',
-    user_active: enriched.userFlags?.isActive?.toString() || '',
-    login_count: enriched.userFlags?.loginCount?.toString() || '',
-    failed_login_attempts: enriched.userFlags?.failedLoginAttempts?.toString() || '',
     event_type: enriched.eventType,
     severity: enriched.severity,
     component: 'fingerprint-enrichment',
-    risk_score: enriched.riskScore?.score?.toString() || '',
-    risk_tier: enriched.riskScore?.tier || '',
-    risk_factors: enriched.riskScore?.factors?.map(f => f.name).join(', ') || '',
-    risk_recommendation: enriched.riskScore?.recommendation || ''
+    ...(Number.isFinite(enriched.riskScore?.score) ? { risk_score: String(enriched.riskScore?.score) } : {}),
   };
 
   logger.info('Fingerprint enrichment logged', stringLogData);
@@ -601,19 +603,12 @@ export async function enrichFingerprintOnMismatch(
   const enriched = await enrichFingerprint(ctx, fingerprintId, undefined, 'fingerprint_mismatch', consentPreferences);
 
   logger.error('SECURITY ALERT: Fingerprint mismatch detected', {
-    fingerprint_id: enriched.fingerprintId,
-    session_id: enriched.sessionId ?? '',
-    user_id: enriched.userId ?? '',
-    expected_hash: expectedHash.slice(0, 16),
-    received_hash: receivedHash.slice(0, 16),
+    ...(enriched.fingerprintHash ? { fingerprint_hash: enriched.fingerprintHash } : {}),
+    ...(enriched.sessionCorrelationId ? { session_correlation_id: enriched.sessionCorrelationId } : {}),
     alert_type: 'session_hijacking',
     risk_level: 'critical',
-    geo_country: enriched.geoLocation?.country ?? '',
     vpn_detected: enriched.vpnDetection.isVPN ? 'true' : 'false',
     device_type: enriched.deviceType,
-    referrer: enriched.navigation.referrer ?? '',
-    current_url: enriched.navigation.currentUrl,
-    pathname: enriched.navigation.pathname,
   });
 
   return enriched;
