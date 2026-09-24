@@ -196,6 +196,43 @@ describe('FingerprintEnrichmentService', () => {
       expect(spanAttributes).not.toHaveProperty('fingerprint.hash');
     });
 
+    it('never emits durable user or session IDs even with tracking consent', async () => {
+      const rawUserId = 'durable-user-secret-for-telemetry-regression';
+      const rawSessionId = 'session-bearer-secret-for-telemetry-regression';
+      const spanAttributes: Record<string, unknown> = {};
+      const fileEntries: unknown[] = [];
+      const correlation = `fp-session:v1:${createHmac('sha256', 'test-only-key')
+        .update('tinyland:fingerprint-session:v1\0').update(rawSessionId).digest('hex')}`;
+      configureFingerprint({
+        deriveSessionCorrelation: (sessionId) => `fp-session:v1:${createHmac('sha256', 'test-only-key')
+          .update('tinyland:fingerprint-session:v1\0').update(sessionId).digest('hex')}`,
+        createSpan: async (_name, fn) => fn({
+          setAttribute: (key, value) => { spanAttributes[key] = value; },
+          recordException: vi.fn(), setStatus: vi.fn(), end: vi.fn(),
+        }),
+        fileLogger: { write: async (entry) => { fileEntries.push(entry); } },
+      });
+
+      const enriched = await enrichFingerprint(createMockContext({
+        session: { id: rawSessionId, userId: rawUserId },
+        user: { id: rawUserId, username: 'testuser', role: 'member' },
+      }), 'fp-tracking-consent', undefined, 'session_validated', {
+        consent: { categoriesRecord: { tracking: true } },
+      });
+
+      expect(enriched.userId).toBe(rawUserId); // Private return value remains usable.
+      expect(enriched.sessionId).toBeNull();
+      expect(enriched.sessionCorrelationId).toBe(correlation);
+      expect(spanAttributes['session.correlation_id']).toBe(correlation);
+      expect(spanAttributes['consent.categories.tracking']).toBe('true');
+      expect(spanAttributes).not.toHaveProperty('user.id');
+      expect(spanAttributes).not.toHaveProperty('session.id');
+      const emitted = JSON.stringify({ spanAttributes, fileEntries });
+      expect(emitted).not.toContain(rawUserId);
+      expect(emitted).not.toContain(rawSessionId);
+      expect(emitted).toContain(correlation);
+    });
+
     it('rejects a prefixed hex bearer and tolerates a throwing server correlation port', async () => {
       const bearer = 'a'.repeat(64);
       const ctx = createMockContext({ session: { id: bearer, userId: 'user-456' } });
