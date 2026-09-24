@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 — unreleased source candidate
+
+- Fail closed when fingerprint/IP hashing or encryption ports are absent or
+  identity-valued. Do not emit raw IP, raw session ID, fingerprint ID, full URL,
+  referrer, or user path in enrichment logs and spans.
+- Accept only a server-configured `deriveSessionCorrelation` HMAC port that
+  returns `fp-session:v1:<64 lowercase hex>` and does not echo the bearer.
+  Missing, invalid and throwing ports omit correlation without affecting auth.
+- Preserve the nullable legacy `sessionId` and IP result fields for source
+  compatibility, but return no raw values from new enrichment.
+- Consumers of `sessionId`, raw `clientIp` or full navigation URLs in enrichment
+  results must migrate to explicit non-bearer correlation and coarse location
+  metadata; historical traces may still need separate read-side filtering.
+
 ## 0.3.0 — 2026-07-03
 
 Port of the vendored `tinyland.dev/packages/tinyland-fingerprint` 0.3.0 surface

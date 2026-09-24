@@ -144,7 +144,7 @@ export interface UserFlagsFetcher {
 export type ReverseGeocodeFn = (
   latitude: number,
   longitude: number,
-  context?: { fingerprintId?: string; sessionId?: string | null }
+  context?: { fingerprintId?: string; sessionId?: string | null; sessionCorrelationId?: string }
 ) => Promise<GeoLocationResult | null>;
 
 
@@ -254,6 +254,8 @@ export interface FingerprintConfig {
   hashFingerprint?: (fp: string) => string | Promise<string>;
   hashIp?: (ip: string) => string;
   encryptIP?: (ip: string) => string;
+  /** Server-only HMAC derivation; never pass through the raw bearer value. */
+  deriveSessionCorrelation?: (rawSessionId: string) => string | Promise<string>;
   calculateRiskScore?: (enriched: any, context?: any) => RiskScoreResult;
   detectVPN?: (ip: string) => Promise<VPNDetectionResult>;
   isPrivateIP?: (ip: string) => boolean;

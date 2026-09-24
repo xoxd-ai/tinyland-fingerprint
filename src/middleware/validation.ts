@@ -14,7 +14,6 @@ import { enrichFingerprintOnMismatch, enrichFingerprintOnValidation } from '../s
 const logger = getScopedLogger('fingerprint-validation');
 
 interface SessionFingerprint {
-  sessionId: string;
   fingerprintHash: string;
   createdAt: Date;
   lastValidated: Date;
@@ -23,6 +22,18 @@ interface SessionFingerprint {
 
 
 const sessionFingerprints = new Map<string, SessionFingerprint>();
+
+async function safeFingerprintHash(fingerprint: string): Promise<string | null> {
+  const hashPort = getFingerprintConfig().hashFingerprint;
+  if (!hashPort) return null;
+  try {
+    const hash = await Promise.resolve(hashPort(fingerprint));
+    return typeof hash === 'string' && hash.length >= 32 && !hash.includes(fingerprint)
+      ? hash : null;
+  } catch {
+    return null;
+  }
+}
 
 
 
@@ -34,12 +45,13 @@ export async function storeFingerprint(
   userId: string,
   fingerprint: string
 ): Promise<void> {
-  const config = getFingerprintConfig();
-  const hashFn = config.hashFingerprint ?? ((fp: string) => fp);
-  const fingerprintHash = await Promise.resolve(hashFn(fingerprint));
+  const fingerprintHash = await safeFingerprintHash(fingerprint);
+  if (!fingerprintHash) {
+    logger.warn('Fingerprint storage skipped', { category: 'hash_port_unavailable' });
+    return;
+  }
 
   sessionFingerprints.set(sessionId, {
-    sessionId,
     fingerprintHash,
     createdAt: new Date(),
     lastValidated: new Date(),
@@ -47,9 +59,6 @@ export async function storeFingerprint(
   });
 
   logger.info('Fingerprint stored for session', {
-    'session.id': sessionId,
-    'user.id': userId,
-    'fingerprint.hash': fingerprintHash.slice(0, 8) + '...',
     'trace_context': 'fingerprint_store'
   });
 }
@@ -62,33 +71,34 @@ export async function storeFingerprint(
 export async function validateFingerprint(
   ctx: FingerprintRequestContext
 ): Promise<{ valid: boolean; reason?: string }> {
-  const config = getFingerprintConfig();
-
   
   if (!ctx.user || !ctx.session) {
     return { valid: true };
   }
 
-  const sessionId = ctx.session.id!;
+  const sessionId = ctx.session.id;
+  if (!sessionId) return { valid: true, reason: 'missing_session_id' };
   const clientFingerprint = ctx.cookies?.get('fp_id');
 
   
   if (!clientFingerprint) {
     logger.warn('Missing fingerprint cookie', {
-      'session.id': sessionId,
-      'user.id': ctx.user.id!,
       'alert.type': 'missing_fingerprint',
       'severity': 'low'
     });
     return { valid: true, reason: 'missing_fingerprint_cookie' };
   }
 
+  const clientFingerprintHash = await safeFingerprintHash(clientFingerprint);
+  if (!clientFingerprintHash) {
+    logger.warn('Fingerprint comparison skipped', { category: 'hash_port_unavailable' });
+    return { valid: true, reason: 'fingerprint_hash_unavailable' };
+  }
+
   
   const stored = sessionFingerprints.get(sessionId);
   if (!stored) {
     logger.warn('No stored fingerprint for session', {
-      'session.id': sessionId,
-      'user.id': ctx.user.id!,
       'alert.type': 'missing_stored_fingerprint',
       'severity': 'low'
     });
@@ -97,16 +107,9 @@ export async function validateFingerprint(
   }
 
   
-  const hashFn = config.hashFingerprint ?? ((fp: string) => fp);
-  const clientFingerprintHash = await Promise.resolve(hashFn(clientFingerprint));
-
   if (clientFingerprintHash !== stored.fingerprintHash) {
     
     logger.error('Session hijacking detected: Fingerprint mismatch', {
-      'session.id': sessionId,
-      'user.id': ctx.user.id!,
-      'fingerprint.expected': stored.fingerprintHash.slice(0, 8) + '...',
-      'fingerprint.received': clientFingerprintHash.slice(0, 8) + '...',
       'fingerprint.created_at': stored.createdAt.toISOString(),
       'fingerprint.last_validated': stored.lastValidated.toISOString(),
       'alert.type': 'session_hijacking',
@@ -120,11 +123,9 @@ export async function validateFingerprint(
         stored.fingerprintHash,
         clientFingerprintHash
       );
-    } catch (enrichError) {
+    } catch {
       logger.warn('Failed to enrich fingerprint on mismatch', {
-        error: enrichError instanceof Error ? enrichError.message : String(enrichError),
-        session_id: sessionId,
-        user_id: ctx.user.id!
+        category: 'enrichment_failed'
       });
     }
 
@@ -139,13 +140,11 @@ export async function validateFingerprint(
   try {
     await enrichFingerprintOnValidation(ctx, clientFingerprint);
     logger.info('Fingerprint enriched on validation', {
-      'session.id': sessionId,
-      'user.id': ctx.user.id!
+      'trace_context': 'fingerprint_validation'
     });
-  } catch (enrichError) {
+  } catch {
     logger.error('Failed to enrich fingerprint on validation', {
-      error: enrichError instanceof Error ? enrichError.message : String(enrichError),
-      'session.id': sessionId
+      category: 'enrichment_failed'
     });
   }
 
@@ -160,7 +159,6 @@ export function clearFingerprint(sessionId: string): void {
 
   if (removed) {
     logger.info('Fingerprint cleared for session', {
-      'session.id': sessionId,
       'trace_context': 'fingerprint_clear'
     });
   }

@@ -22,19 +22,21 @@ export type DeviceType = 'mobile' | 'tablet' | 'desktop' | 'unknown';
 export interface EnrichedFingerprint {
   
   fingerprintId: string; 
-  fingerprintHash: string; 
+  fingerprintHash: string; // Empty unless a non-identity hash port is configured.
   timestamp: string; 
 
   
-  sessionId: string | null;
+  sessionId: string | null; // Kept for source compatibility; always null on new enrichment.
+  /** Server-supplied non-bearer correlation; never a raw session ID. */
+  sessionCorrelationId?: string;
   userId: string | null;
   userHandle: string | null;
   userRole: string | null;
 
   
-  clientIp: string; 
-  clientIpEncrypted: string; 
-  clientIpMasked: string; 
+  clientIp: string; // Raw IP is never returned; always empty on new enrichment.
+  clientIpEncrypted: string; // Empty unless a non-identity encryption port is configured.
+  clientIpMasked: string; // Empty unless a non-identity hash port is configured.
 
   
   geoLocation: {

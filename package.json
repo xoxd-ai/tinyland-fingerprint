@@ -1,6 +1,6 @@
 {
   "name": "@tummycrypt/tinyland-fingerprint",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Fingerprint intelligence services: enrichment, search, history, settings, validation, and caching",
   "type": "module",
   "license": "Zlib AND LicenseRef-Tinyland-Proprietary",
