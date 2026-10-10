@@ -15,9 +15,6 @@ importers:
       '@fast-check/vitest':
         specifier: ^0.2.4
         version: 0.2.4(vitest@4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(vite@8.0.10(@types/node@22.19.17)))
-      '@tummycrypt/tinyland-otel':
-        specifier: ^0.2.2
-        version: 0.2.2(@opentelemetry/api@1.9.1)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
@@ -167,22 +164,6 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
-
-  '@tummycrypt/tinyland-otel@0.2.2':
-    resolution: {integrity: sha512-81w47VOEP/elCJ0mG75eZXaNwwI2e5d7Vlw+yPsuHkovrtXD/GdKLJXqrC5v97TTrqhT0m8ocAhknI3uvTie/w==}
-    engines: {node: '>=22.0.0'}
-    peerDependencies:
-      '@opentelemetry/api': ^1.9.0
-      '@opentelemetry/auto-instrumentations-node': ^0.67.0
-      '@opentelemetry/sdk-node': ^0.209.0
-      '@pyroscope/nodejs': ^0.4.0
-    peerDependenciesMeta:
-      '@opentelemetry/auto-instrumentations-node':
-        optional: true
-      '@opentelemetry/sdk-node':
-        optional: true
-      '@pyroscope/nodejs':
-        optional: true
 
   '@tybys/wasm-util@0.10.1':
     resolution: {integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==}
@@ -566,7 +547,8 @@ snapshots:
       '@tybys/wasm-util': 0.10.1
     optional: true
 
-  '@opentelemetry/api@1.9.1': {}
+  '@opentelemetry/api@1.9.1':
+    optional: true
 
   '@oxc-project/types@0.127.0': {}
 
@@ -624,10 +606,6 @@ snapshots:
   '@rolldown/pluginutils@1.0.0-rc.17': {}
 
   '@standard-schema/spec@1.1.0': {}
-
-  '@tummycrypt/tinyland-otel@0.2.2(@opentelemetry/api@1.9.1)':
-    dependencies:
-      '@opentelemetry/api': 1.9.1
 
   '@tybys/wasm-util@0.10.1':
     dependencies:
