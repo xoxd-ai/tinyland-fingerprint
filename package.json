@@ -45,16 +45,7 @@
     "fast-check": "^4.3.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.0",
-    "publint": "^0.3.18",
-    "@tummycrypt/tinyland-otel": "^0.2.2"
-  },
-  "peerDependencies": {
-    "@tummycrypt/tinyland-otel": "^0.2.2"
-  },
-  "peerDependenciesMeta": {
-    "@tummycrypt/tinyland-otel": {
-      "optional": true
-    }
+    "publint": "^0.3.18"
   },
   "engines": {
     "node": ">=22.0.0"

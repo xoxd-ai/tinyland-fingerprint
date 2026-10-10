@@ -22,7 +22,11 @@ bazel_dep(name = "rules_nodejs", version = "6.7.3")
 # tinyland-security anymore. Vendored 0.3.0 (monorepo) still carries the
 # equivalent dead wiring in its own BUILD.bazel; recommend it drop its copy
 # too. Flagged in the PR body as a hygiene decision, not silently dropped.
-bazel_dep(name = "tummycrypt_tinyland_otel", version = "0.2.3")
+#
+# No inter-module bazel_dep remains. tinyland-otel was only an unused
+# devDependency and optional peer (nothing in src/ or tests/ imports it); it
+# made npm_translate_lock fetch @tummycrypt/tinyland-otel 0.2.2 from npmjs into
+# every consumer graph, against RU6 (Bazel-only in-house distribution).
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 node.toolchain(node_version = "22.13.1")
