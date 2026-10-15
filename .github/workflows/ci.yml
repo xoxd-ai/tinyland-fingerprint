@@ -20,11 +20,11 @@ jobs:
       node_versions: '["22"]'
       publish_node_version: "22"
       pnpm_version: "10.13.1"
-      # npm-resolution retired; validate via bazel (TIN-1716)
-      typecheck_command: ""
-      unit_test_command: ""
-      build_command: "true"
-      package_check_command: "true"
+      # No in-house npm deps remain (RU6), so the pnpm lane validates again.
+      typecheck_command: pnpm typecheck
+      unit_test_command: pnpm test
+      build_command: pnpm build
+      package_check_command: pnpm check:package
       bazel_targets: "//:pkg //:test"
       package_dir: ./bazel-bin/pkg
       npm_access: public
