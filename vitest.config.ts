@@ -12,5 +12,8 @@ export default defineConfig({
     root: __dirname,
     globals: true,
     environment: 'node',
+    // Scope discovery to the source tree; under Bazel the runfiles tree
+    // (test_/test.runfiles/_main/tests) would otherwise be collected twice.
+    include: ['tests/**/*.test.ts'],
   },
 });
