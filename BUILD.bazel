@@ -38,7 +38,23 @@ ts_project(
         ":node_modules",
         ":node_modules/ua-parser-js",
         ":node_modules/@types/node",
-        ":node_modules/@types/ua-parser-js",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Typecheck-only target (tsc 7.0.2, no emit).
+ts_project(
+    name = "typecheck",
+    srcs = glob(["src/**/*.ts"]) + ["package.json"],
+    declaration = False,
+    no_emit = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    validate = False,
+    deps = [
+        ":node_modules",
+        ":node_modules/ua-parser-js",
+        ":node_modules/@types/node",
     ],
     visibility = ["//visibility:public"],
 )
@@ -50,7 +66,7 @@ npm_package(
         ":tinyland_fingerprint",
     ],
     package = "@tummycrypt/tinyland-fingerprint",
-    version = "0.3.0",
+    version = "1.0.0",
     visibility = ["//visibility:public"],
 )
 
@@ -61,6 +77,10 @@ vitest_bin.vitest_test(
         "tsconfig.json",
         ":node_modules/vitest",
         "vitest.config.ts",
+        # Read by tests/package-authority.test.ts (version-parity guard).
+        "//:MODULE.bazel",
+        "BUILD.bazel",
+        "package.json",
     ] + glob(["src/**/*.ts"]) + glob(["tests/**/*.test.ts", "tests/**/*.ts"]),
     args = [
         "run",

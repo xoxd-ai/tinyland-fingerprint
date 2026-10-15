@@ -4,11 +4,23 @@ Fingerprint intelligence services: enrichment, search, history, settings,
 validation, and caching. The fingerprint is UA-parse + Tempo evidence — this
 package does NOT use the fingerprintjs library.
 
+## Install (Bazel only)
+
+This package is distributed only as a Bazel module from the xoxd-ai
+bazel-registry; it is not published to npm.
+
+```starlark
+bazel_dep(name = "tummycrypt_tinyland_fingerprint", version = "1.0.0")
+```
+
+Toolchain: TypeScript 7.0.2, Node 22.22.0, vitest 5.0.3. See CHANGELOG for the
+1.0.0 migration notes.
+
 ## Evidence, not a credential
 
 This package supplies the print + Tempo evidence plane. The fingerprint is
 never an auth credential: `validateSession()` in
-[`@tummycrypt/tinyland-auth`](https://github.com/tinyland-inc/tinyland-auth)
+[`@tummycrypt/tinyland-auth`](https://github.com/xoxd-ai/tinyland-auth)
 never destroys an authenticated session on a missing/changed fingerprint
 (TIN-1610, ratified). At the product layer, the same print is what
 user-proof-during-session is built from, enabling cookieless persistent

@@ -143,6 +143,20 @@ export function resolveFingerprintDataPlaneAvailability(
   };
 }
 
+/**
+ * Shape of a Loki `query_range` stream response, as read by this service.
+ * `Response.json()` is typed `Promise<unknown>` in current undici/@types/node,
+ * so the parsed body is narrowed to this explicitly.
+ */
+interface LokiStreamQueryResponse {
+  data?: {
+    result?: Array<{
+      stream?: Record<string, string>;
+      values: Array<[string, string]>;
+    }>;
+  };
+}
+
 interface FingerprintStats {
   totalFingerprints: number;
   vpnUsers: number;
@@ -225,7 +239,7 @@ export class FingerprintDataService {
       throw new Error(`Loki query failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as LokiStreamQueryResponse;
     const records: FingerprintRecord[] = [];
 
     if (data.data?.result) {
@@ -405,7 +419,7 @@ export class FingerprintDataService {
           throw new Error(`Loki query failed: ${response.status} ${response.statusText}`);
         }
 
-        const data = await response.json();
+        const data = (await response.json()) as LokiStreamQueryResponse;
 
         const records: FingerprintRecord[] = [];
         if (data.data?.result) {
@@ -655,7 +669,7 @@ export class FingerprintDataService {
           })
         });
 
-        const data = await response.json();
+        const data = (await response.json()) as LokiStreamQueryResponse;
         const records: FingerprintRecord[] = [];
 
         if (data.data?.result) {
